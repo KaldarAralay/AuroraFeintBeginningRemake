@@ -12,6 +12,14 @@
   const BOARD_W = COLS * TILE;
   const BOARD_H = VISIBLE_ROWS * TILE;
   const PUZZLE_TILE = 43;
+  const MINE_OPENING_ROWS = 4;
+  const MINE_DIFFICULTIES = [
+    { value: 1, label: "Quiet", speed: 3.8 },
+    { value: 2, label: "Steady", speed: 4.7 },
+    { value: 3, label: "Deep", speed: 5.6 },
+    { value: 4, label: "Hurry", speed: 6.9 },
+    { value: 5, label: "Collapse", speed: 8.4 },
+  ];
   const GRAVITY = {
     up: { row: -1, col: 0, label: "U" },
     down: { row: 1, col: 0, label: "D" },
@@ -358,6 +366,17 @@
     },
   };
 
+  const toolMasteries = [
+    { id: "dreameater-tool", special: "compass", label: "Dreameater", icon: "tool_icon_skull_small.png" },
+    { id: "alchemist-joker", special: "potion", label: "Alchemist", icon: "tool_icon_magic_potion_small.png" },
+    { id: "watchmaker-loop", special: "watch", label: "Time Stopper", icon: "tool_icon_time_stopper_small.png" },
+    { id: "hammer-2x", special: "hammer2", label: "Strategist", icon: "tool_icon_hammer_2x_small.png" },
+    { id: "redhot-coal", special: "coal", label: "Furlie", icon: "tool_icon_redhotcoal_small.png" },
+    { id: "hammer-3x", special: "hammer3", label: "Sorcerer", icon: "tool_icon_hammer_x3_small.png" },
+  ];
+
+  const toolMasteryBySpecial = Object.fromEntries(toolMasteries.map((tool) => [tool.special, tool]));
+
   const imageNames = new Set([
     "Default.png",
     "Night_Woods_Dark_BG.png",
@@ -369,7 +388,21 @@
     "Icon2.png",
     "character_female_portrait.png",
     "character_male_portrait.png",
+    "character_female_cropped_head.png",
+    "character_male_cropped_head.png",
     "character_holder.png",
+    "character_portrait_undisclosed.png",
+    "tab_icon_party.png",
+    "tab_icon_party_selected.png",
+    "tab_icon_inventory.png",
+    "tab_icon_inventory_selected.png",
+    "tab_icon_community.png",
+    "tab_icon_community_selected.png",
+    "icon_scroll.png",
+    "icon_skills.png",
+    "icon_weapons.png",
+    "icon_armor.png",
+    "icon_accessories.png",
     "map_location_main_menu_normal.png",
     "map_location_mine_normal_glow.png",
     "map_location_store_normal_glow.png",
@@ -390,6 +423,7 @@
     "row_column_explosion.png",
     "color_typed_explosion.png",
     "mining_details_view_background.png",
+    "mining_game_startup_background.png",
     "smithing_details_view_background.png",
     "alchemy_details_view_background.png",
     "icon_crystals.png",
@@ -411,6 +445,12 @@
     "tool_icon_redhotcoal_large.png",
     "tool_icon_hammer_2x_large.png",
     "tool_icon_hammer_x3_large.png",
+    "tool_icon_skull_small.png",
+    "tool_icon_time_stopper_small.png",
+    "tool_icon_magic_potion_small.png",
+    "tool_icon_redhotcoal_small.png",
+    "tool_icon_hammer_2x_small.png",
+    "tool_icon_hammer_x3_small.png",
     "wild_block_4_compass.png",
     "wild_block_4_compass_accessory.png",
     "wild_block_5_watch.png",
@@ -814,6 +854,7 @@
       level: 1,
       xp: 0,
       crystals: 35,
+      mineDifficulty: 3,
       resources: emptyResources(25),
       owned: [],
       blueprints: [],
@@ -821,6 +862,12 @@
       equipment: [],
       mastery: emptyResources(1),
       craftFailures: {},
+      toolMastery: {},
+      stats: {
+        largestCombo: 0,
+        mostBlocksPopped: 0,
+        longestChain: 0,
+      },
     };
   }
 
@@ -839,12 +886,15 @@
       ...base,
       ...raw,
       resources: { ...base.resources, ...(raw.resources || {}) },
+      mineDifficulty: normalizeMineDifficulty(raw.mineDifficulty ?? base.mineDifficulty),
       mastery: { ...base.mastery, ...(raw.mastery || {}) },
       owned: Array.isArray(raw.owned) ? raw.owned : [],
       blueprints: Array.isArray(raw.blueprints) ? raw.blueprints : [],
       magicbooks: Array.isArray(raw.magicbooks) ? raw.magicbooks : [],
       equipment: Array.isArray(raw.equipment) ? raw.equipment : [],
       craftFailures: raw.craftFailures && typeof raw.craftFailures === "object" ? raw.craftFailures : {},
+      toolMastery: raw.toolMastery && typeof raw.toolMastery === "object" ? raw.toolMastery : {},
+      stats: { ...base.stats, ...(raw.stats || {}) },
     };
   }
 
@@ -894,11 +944,11 @@
     return node;
   }
 
-  function topBar(title, backTarget = renderMap, right = null) {
+  function topBar(title, backTarget = renderMap, right = null, backLabel = "Back") {
     const bar = document.createElement("div");
     bar.className = "top-bar";
     bar.append(
-      button("nav-btn", "Back", backTarget, { title: "Back" }),
+      button("nav-btn", backLabel, backTarget, { title: backLabel }),
       Object.assign(document.createElement("h1"), { className: "title", textContent: title }),
       right || document.createElement("span")
     );
@@ -1012,7 +1062,7 @@
     ui.append(menu);
 
     ui.append(
-      mapHotspot("mine", "Mine", () => startBoard("mine")),
+      mapHotspot("mine", "Mine", renderMineSetup),
       mapHotspot("store", "Store", renderStore),
       mapHotspot("smith", "Smith", renderSmith),
       mapHotspot("tower", "Tower", renderTower),
@@ -1022,6 +1072,71 @@
 
   function mapHotspot(kind, title, onClick) {
     return button(`map-hotspot ${kind}`, title, onClick, { title });
+  }
+
+  function renderMineSetup() {
+    setScreen("mine-setup");
+    topBar("The Mine", renderMap, null, "Map");
+
+    let selected = normalizeMineDifficulty(state.mineDifficulty);
+    const panel = document.createElement("div");
+    panel.className = "mine-setup-panel";
+
+    const heading = Object.assign(document.createElement("h2"), { textContent: "Adjust the game difficulty." });
+    const note = Object.assign(document.createElement("p"), {
+      className: "mine-setup-note",
+      textContent: "Level up your character to access faster speeds.",
+    });
+    const current = Object.assign(document.createElement("strong"), { className: "mine-depth-label" });
+
+    const labels = document.createElement("div");
+    labels.className = "mine-slider-labels";
+    labels.append(
+      Object.assign(document.createElement("span"), { textContent: "Slower (0)" }),
+      Object.assign(document.createElement("span"), { textContent: "Faster (100)" })
+    );
+
+    const slider = document.createElement("input");
+    slider.className = "mine-depth-slider";
+    slider.type = "range";
+    slider.min = "1";
+    slider.max = "5";
+    slider.step = "1";
+    slider.value = String(selected);
+
+    const update = () => {
+      selected = normalizeMineDifficulty(slider.value);
+      const settings = mineDifficultySettings(selected);
+      current.textContent = String((settings.value - 1) * 25);
+    };
+    slider.addEventListener("input", update);
+    update();
+
+    panel.append(
+      heading,
+      note,
+      labels,
+      slider,
+      current,
+      button("stone-btn", "Play Mining Game", () => startMine(selected))
+    );
+    ui.append(panel);
+  }
+
+  function startMine(difficulty = state.mineDifficulty) {
+    state.mineDifficulty = normalizeMineDifficulty(difficulty);
+    saveState();
+    startBoard("mine", null, { difficulty: state.mineDifficulty });
+  }
+
+  function normalizeMineDifficulty(value) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return 3;
+    return Math.max(1, Math.min(5, Math.round(parsed)));
+  }
+
+  function mineDifficultySettings(value) {
+    return MINE_DIFFICULTIES.find((difficulty) => difficulty.value === normalizeMineDifficulty(value)) || MINE_DIFFICULTIES[2];
   }
 
   function resourceStrip() {
@@ -1037,24 +1152,244 @@
   }
 
   function renderMenu() {
-    setScreen("menu");
-    topBar("Aurora Feint", renderMap);
-    const stats = document.createElement("div");
-    stats.className = "stats-panel";
-    stats.append(
-      statRow("Icon2.png", "Level", state.level),
-      statRow("icon_crystals.png", "Crystals", state.crystals),
-      statRow("icon_blueprint.png", "Blueprints", state.blueprints.length),
-      statRow("icon_magicbook.png", "Magicbooks", state.magicbooks.length)
+    renderParty();
+  }
+
+  function renderParty() {
+    setScreen("party");
+    topBar("Your Party", renderMap, resumeButton());
+
+    const content = rpgContent("party-list");
+    content.append(playerPartyCard());
+    for (let index = 0; index < 3; index += 1) {
+      content.append(friendPartyCard(index));
+    }
+    ui.append(content, bottomTabs("party"));
+  }
+
+  function renderCharacterSheet() {
+    setScreen("character-detail");
+    topBar("Character", renderParty, resumeButton());
+
+    const content = rpgContent("character-sheet");
+    content.append(characterHeroPanel(), characterStatsPanel(), masteryPanel("Tool Mastery", toolMasteryRows()), masteryPanel("Essence Mastery", essenceMasteryRows()));
+    ui.append(content, bottomTabs("party"));
+  }
+
+  function renderInventory() {
+    setScreen("inventory");
+    topBar("Inventory", renderMap, resumeButton());
+
+    const content = rpgContent("inventory-list");
+    content.append(inventorySummaryPanel());
+    content.append(inventorySection("Knowledge", [
+      inventoryRow("icon_blueprint.png", "Blueprints", state.blueprints.length, renderSmith),
+      inventoryRow("icon_magicbook.png", "Magic Books", state.magicbooks.length, renderTower),
+      inventoryRow("icon_scroll.png", "Scrolls", 0),
+    ]));
+    content.append(inventorySection("Equippables", [
+      inventoryRow("icon_skills.png", "Tools", state.equipment.length, renderCharacterSheet),
+      inventoryRow("icon_weapons.png", "Weapons", 0),
+      inventoryRow("icon_armor.png", "Armor", 0),
+      inventoryRow("icon_accessories.png", "Accessories", state.equipment.length),
+    ]));
+    ui.append(content, bottomTabs("inventory"));
+  }
+
+  function renderCommunity() {
+    setScreen("community");
+    topBar("Community", renderMap, resumeButton());
+
+    const content = rpgContent("community-list");
+    const panel = document.createElement("div");
+    panel.className = "rpg-panel community-panel";
+    panel.append(
+      Object.assign(document.createElement("h2"), { textContent: "Community" }),
+      Object.assign(document.createElement("p"), {
+        textContent: "Friends, shared party members, and online Feint services are represented here for the original UI flow.",
+      }),
+      statRow("tab_icon_party.png", "Friends", "Offline"),
+      statRow("icon_crystals.png", "Feint Scores", "Offline"),
+      statRow("icon_scroll.png", "Messages", "Offline")
     );
-    const stack = document.createElement("div");
-    stack.className = "stack";
-    stack.append(
-      button("stone-btn", "Map", renderMap),
-      button("stone-btn", "Mine", () => startBoard("mine")),
-      button("stone-btn", "Store", renderStore)
+    content.append(panel);
+    ui.append(content, bottomTabs("community"));
+  }
+
+  function resumeButton() {
+    return button("nav-btn right", "Resume", renderMap, { title: "Resume" });
+  }
+
+  function rpgContent(extra = "") {
+    const content = document.createElement("div");
+    content.className = `rpg-content ${extra}`.trim();
+    return content;
+  }
+
+  function playerPartyCard() {
+    const node = button("party-card player", "", renderCharacterSheet, { title: "Character" });
+    node.append(
+      img(characterHead(), "party-portrait"),
+      partyCopy(characterName(), "Owned By You", `Category One - Level ${state.level}`),
+      img("button_arrow_right_cap_left.png", "disclosure")
     );
-    ui.append(stats, stack);
+    return node;
+  }
+
+  function friendPartyCard(index) {
+    const node = document.createElement("div");
+    node.className = "party-card locked";
+    node.append(
+      img("character_portrait_undisclosed.png", "party-portrait"),
+      partyCopy("Character Name", "Owned By Your Friend", "Level ?"),
+      img("button_arrow_right_cap_left.png", "disclosure")
+    );
+    return node;
+  }
+
+  function partyCopy(title, owner, detail) {
+    const copy = document.createElement("span");
+    copy.className = "party-copy";
+    copy.append(
+      Object.assign(document.createElement("strong"), { textContent: title }),
+      Object.assign(document.createElement("span"), { textContent: owner }),
+      Object.assign(document.createElement("em"), { textContent: detail })
+    );
+    return copy;
+  }
+
+  function characterHeroPanel() {
+    const panel = document.createElement("div");
+    panel.className = "rpg-panel character-hero";
+    panel.append(
+      img(characterPortrait(), "character-full"),
+      characterIdentity()
+    );
+    return panel;
+  }
+
+  function characterIdentity() {
+    const info = document.createElement("div");
+    info.className = "character-identity";
+    const progress = document.createElement("div");
+    progress.className = "xp-bar";
+    const fill = document.createElement("span");
+    fill.style.width = `${Math.min(100, (state.xp / xpNeeded()) * 100)}%`;
+    progress.append(fill);
+    info.append(
+      Object.assign(document.createElement("h2"), { textContent: characterName() }),
+      Object.assign(document.createElement("span"), { textContent: "Owned By You" }),
+      statRow("icon_skills.png", "Category One", `Level ${state.level}`),
+      progress
+    );
+    return info;
+  }
+
+  function characterStatsPanel() {
+    const panel = document.createElement("div");
+    panel.className = "rpg-panel character-stats";
+    panel.append(
+      statRow("icon_moves.png", "Largest Combo", state.stats.largestCombo),
+      statRow("icon_crystals.png", "Most Blocks Popped", state.stats.mostBlocksPopped),
+      statRow("icon_timer.png", "Longest Chain", state.stats.longestChain)
+    );
+    return panel;
+  }
+
+  function masteryPanel(title, rows) {
+    const panel = document.createElement("div");
+    panel.className = "rpg-panel mastery-panel";
+    const heading = document.createElement("div");
+    heading.className = "mastery-heading";
+    heading.append(
+      Object.assign(document.createElement("strong"), { textContent: title }),
+      Object.assign(document.createElement("span"), { textContent: "Levels" })
+    );
+    panel.append(heading, ...rows);
+    return panel;
+  }
+
+  function toolMasteryRows() {
+    return toolMasteries.map((tool) => masteryRow(tool.icon, tool.label, toolMasteryLevel(tool.id), 8));
+  }
+
+  function essenceMasteryRows() {
+    return resourceTypes.map((type) => masteryRow(type.icon, type.label, essenceMasteryLevel(type.id), 1));
+  }
+
+  function masteryRow(icon, label, level, max) {
+    const row = document.createElement("div");
+    row.className = "mastery-row";
+    row.append(img(icon), document.createTextNode(label), Object.assign(document.createElement("span"), { textContent: `${level}/${max}` }));
+    return row;
+  }
+
+  function inventorySummaryPanel() {
+    const panel = document.createElement("div");
+    panel.className = "rpg-panel inventory-summary";
+    for (const tool of toolMasteries) {
+      panel.append(summaryChip(tool.icon, toolMasteryLevel(tool.id)));
+    }
+    return panel;
+  }
+
+  function summaryChip(icon, count) {
+    const chip = document.createElement("span");
+    chip.className = "summary-chip";
+    chip.append(img(icon), document.createTextNode(String(count)));
+    return chip;
+  }
+
+  function inventorySection(title, rows) {
+    const section = document.createElement("div");
+    section.className = "inventory-section";
+    section.append(Object.assign(document.createElement("h2"), { textContent: title }), ...rows);
+    return section;
+  }
+
+  function inventoryRow(icon, label, count, onClick = null) {
+    const row = onClick ? button("inventory-row", "", onClick, { title: label }) : document.createElement("div");
+    if (!onClick) row.className = "inventory-row";
+    row.append(img(icon), Object.assign(document.createElement("span"), { textContent: label }), Object.assign(document.createElement("strong"), { textContent: String(count) }));
+    return row;
+  }
+
+  function bottomTabs(active) {
+    const tabs = document.createElement("div");
+    tabs.className = "bottom-tabs";
+    tabs.append(
+      bottomTab("party", "Your Party", "tab_icon_party.png", "tab_icon_party_selected.png", renderParty, active),
+      bottomTab("inventory", "Inventory", "tab_icon_inventory.png", "tab_icon_inventory_selected.png", renderInventory, active),
+      bottomTab("community", "Community", "tab_icon_community.png", "tab_icon_community_selected.png", renderCommunity, active)
+    );
+    return tabs;
+  }
+
+  function bottomTab(id, label, icon, selectedIcon, target, active) {
+    const node = button(`bottom-tab${active === id ? " active" : ""}`, "", target, { title: label });
+    node.append(img(active === id ? selectedIcon : icon), Object.assign(document.createElement("span"), { textContent: label }));
+    return node;
+  }
+
+  function characterName() {
+    if (state.character === "male") return "Horn Warden";
+    return "illumina";
+  }
+
+  function characterPortrait() {
+    return state.character === "male" ? "character_male_portrait.png" : "character_female_portrait.png";
+  }
+
+  function characterHead() {
+    return state.character === "male" ? "character_male_cropped_head.png" : "character_female_cropped_head.png";
+  }
+
+  function toolMasteryLevel(id) {
+    return Math.max(0, Math.min(8, Number(state.toolMastery[id]) || (state.equipment.includes(id) ? 1 : 0)));
+  }
+
+  function essenceMasteryLevel(id) {
+    return Math.max(0, (state.mastery[id] || 1) - 1);
   }
 
   function statRow(icon, label, value) {
@@ -1351,15 +1686,16 @@
       const item = storeItems.find((candidate) => candidate.id === id);
       if (!item) continue;
       const crafted = state.equipment.includes(item.reward.id);
-      const canForge = !crafted && canStartCraft(item);
+      const maxed = crafted && toolMasteryLevel(item.reward.id) >= 8;
+      const canForge = !maxed && canStartCraft(item);
       const row = button("item-row", "", () => startCraft(item), {
-        disabled: crafted || !canForge,
-        title: crafted ? "Crafted" : canForge ? "Forge" : "Need essences",
+        disabled: maxed || !canForge,
+        title: maxed ? "Mastered" : canForge ? (crafted ? "Upgrade" : "Forge") : "Need essences",
       });
       row.append(
         img(crafted ? item.reward.icon : item.icon, "icon"),
-        itemCopy(item.title, smithRowDetail(item, crafted)),
-        priceNode(crafted ? "Done" : canForge ? "Forge" : "Need", crafted ? "icon_blueprint_solved.png" : "icon_timer.png")
+        itemCopy(crafted ? item.reward.title : item.title, smithRowDetail(item, crafted, maxed)),
+        priceNode(maxed ? "8/8" : canForge ? (crafted ? `${toolMasteryLevel(item.reward.id)}/8` : "Forge") : "Need", maxed ? "icon_blueprint_solved.png" : "icon_timer.png")
       );
       list.append(row);
     }
@@ -1407,9 +1743,10 @@
     return `${parts.join(", ")} in ${time}s.`;
   }
 
-  function smithRowDetail(item, crafted) {
-    if (crafted) return `${item.reward.title} is ready and can appear in the mine.`;
-    return `${smithCostText(item)} Then collect ${targetText(item.target, item.time)}`;
+  function smithRowDetail(item, crafted, maxed) {
+    if (maxed) return "Mastered. Its wild-block effect is at full strength.";
+    if (crafted) return `${smithCostText(item)} Then collect ${targetText(smithTarget(item), smithTime(item))}`;
+    return `${smithCostText(item)} Then collect ${targetText(smithTarget(item), smithTime(item))}`;
   }
 
   function smithCostText(item) {
@@ -1418,7 +1755,8 @@
       .filter(([, amount]) => amount > 0)
       .map(([id, amount]) => `${capitalize(id)} ${amount}`);
     const failures = craftFailureCount(item);
-    return `${failures ? "Retry" : "Forge"} cost: ${parts.join(", ")}.`;
+    const crafted = state.equipment.includes(item.reward.id);
+    return `${failures ? "Retry" : crafted ? "Upgrade" : "Forge"} cost: ${parts.join(", ")}.`;
   }
 
   function craftFailureCount(item) {
@@ -1427,14 +1765,38 @@
 
   function smithCost(item) {
     const attempts = craftFailureCount(item);
-    const multiplier = 1 + attempts * 0.35;
+    const level = state.equipment.includes(item.reward.id) ? toolMasteryLevel(item.reward.id) : 0;
+    const multiplier = 1 + level * 0.52 + attempts * 0.35;
     return Object.fromEntries(
       Object.entries(item.forgeCost || item.target || {}).map(([id, amount]) => [id, Math.ceil(amount * multiplier)])
     );
   }
 
   function canStartCraft(item) {
+    if (state.equipment.includes(item.reward.id) && toolMasteryLevel(item.reward.id) >= 8) return false;
     return Object.entries(smithCost(item)).every(([id, amount]) => state.resources[id] >= amount);
+  }
+
+  function smithDifficultyLevel(item) {
+    return state.equipment.includes(item.reward.id) ? toolMasteryLevel(item.reward.id) : 0;
+  }
+
+  function smithTarget(item) {
+    const level = smithDifficultyLevel(item);
+    const multiplier = 1 + level * 0.22;
+    return Object.fromEntries(
+      Object.entries(item.target || {}).map(([id, amount]) => [id, Math.ceil(amount * multiplier)])
+    );
+  }
+
+  function smithTime(item) {
+    const level = smithDifficultyLevel(item);
+    return Math.max(72, Math.round((item.time || 120) - level * 6));
+  }
+
+  function smithRiseSpeed(item) {
+    const level = smithDifficultyLevel(item);
+    return 6.1 + level * 0.33;
   }
 
   function spendSmithCost(item) {
@@ -1444,7 +1806,12 @@
   }
 
   function startCraft(item) {
-    if (!item || state.equipment.includes(item.reward.id)) {
+    if (!item) {
+      renderSmith();
+      return;
+    }
+    const upgrade = state.equipment.includes(item.reward.id);
+    if (upgrade && toolMasteryLevel(item.reward.id) >= 8) {
       renderSmith();
       return;
     }
@@ -1454,15 +1821,15 @@
     }
     spendSmithCost(item);
     saveState();
-    startBoard("craft", item);
+    startBoard("craft", item, { upgrade });
   }
 
-  function startBoard(mode, item = null) {
+  function startBoard(mode, item = null, options = {}) {
     if (mode === "puzzle" && item && isMagicbookSolved(item)) {
       renderTower();
       return;
     }
-    if (mode === "craft" && item?.reward && state.equipment.includes(item.reward.id)) {
+    if (mode === "craft" && item?.reward && state.equipment.includes(item.reward.id) && !options.upgrade) {
       renderSmith();
       return;
     }
@@ -1482,17 +1849,25 @@
           ? "hud_border_alchemy.png"
           : "hud_border_mining.png";
     const puzzleDefinition = mode === "puzzle" ? towerPuzzleDefinition(item) : null;
+    const mineDifficulty = mode === "mine" ? normalizeMineDifficulty(options.difficulty ?? state.mineDifficulty) : null;
 
     boardGame = {
       mode,
       item,
+      mineDifficulty,
+      craftUpgrade: Boolean(options.upgrade),
+      craftTarget: mode === "craft" ? smithTarget(item) : null,
       puzzleDefinition,
       background,
       border,
       grid: mode === "puzzle" ? createPuzzleGrid(item, puzzleDefinition) : mode === "craft" ? createCraftGrid(item) : createMineGrid(),
       gravity: { ...(mode === "puzzle" ? GRAVITY[puzzleDefinition.gravity] : GRAVITY.down) },
       riseOffset: 0,
-      riseSpeed: mode === "mine" ? 5.6 : mode === "craft" ? 6.1 : 0,
+      riseSpeed: mode === "mine" ? mineDifficultySettings(mineDifficulty).speed : mode === "craft" ? smithRiseSpeed(item) : 0,
+      openingRowsRemaining: mode === "mine" ? MINE_OPENING_ROWS : 0,
+      openingRowActive: false,
+      openingRowDelay: mode === "mine" ? 0.18 : 0,
+      openingRiseSpeed: TILE / 0.22,
       selected: null,
       cursor: mode === "puzzle" ? { row: 2, col: 2 } : { row: 5, col: 2 },
       resolving: 0.2,
@@ -1506,7 +1881,7 @@
       pendingSpecials: [],
       matchCheck: 0.12,
       slowTimer: 0,
-      timeLeft: item?.time || 0,
+      timeLeft: mode === "craft" ? smithTime(item) : item?.time || 0,
       movesLeft: puzzleDefinition?.moves || item?.puzzle?.moves || 0,
       puzzleGoal: puzzleDefinition?.goal || item?.puzzle?.goal || 0,
       cleared: 0,
@@ -1527,17 +1902,17 @@
     const actions = document.createElement("div");
     actions.className = "canvas-actions";
     actions.append(
-      button("small-btn", "Map", () => {
+      button("mine-back-btn", "Map", () => {
         commitBoardGains(false);
         renderMap();
-      })
+      }, { title: "Back to map" })
     );
-    if (mode !== "puzzle") {
+    if (mode !== "puzzle" && mode !== "mine") {
       actions.append(button("small-btn", "Pull", pullRow, { title: "Pull row" }));
-    } else {
+    } else if (mode === "puzzle") {
       actions.append(document.createElement("span"));
     }
-    actions.append(soundButton());
+    if (mode !== "mine") actions.append(soundButton());
     ui.append(actions);
 
     ui.append(tiltControls());
@@ -1653,13 +2028,7 @@
   }
 
   function createMineGrid() {
-    const grid = Array.from({ length: GRID_ROWS }, () => Array(COLS).fill(null));
-    for (let r = 2; r < GRID_ROWS; r += 1) {
-      for (let c = 0; c < COLS; c += 1) {
-        grid[r][c] = randomCell(grid, r, c);
-      }
-    }
-    return grid;
+    return Array.from({ length: GRID_ROWS }, () => Array(COLS).fill(null));
   }
 
   function createCraftGrid(item) {
@@ -1728,7 +2097,8 @@
     if (state.equipment.includes("hammer-3x")) pool.push("hammer3");
     if (!pool.length) return null;
 
-    const chance = Math.min(0.09, 0.03 + pool.length * 0.008);
+    const masteryBoost = pool.reduce((sum, type) => sum + specialMasteryLevel(type), 0) * 0.0012;
+    const chance = Math.min(0.12, 0.03 + pool.length * 0.008 + masteryBoost);
     if (Math.random() > chance) return null;
     return pool[Math.floor(Math.random() * pool.length)];
   }
@@ -1741,11 +2111,16 @@
     return (left1 === type && left2 === type) || (up1 === type && up2 === type);
   }
 
-  function makeRisingRow() {
+  function makeRisingRow(targetRowIndex = boardGame?.grid?.length || 0) {
     const row = Array(COLS).fill(null);
     const pool = boardGame?.mode === "craft" ? craftResourcePool(boardGame.item) : null;
+    const context = boardGame?.grid ? boardGame.grid.map((gridRow) => gridRow.slice()) : [];
+    const rowIndex = targetRowIndex;
+    while (context.length <= rowIndex) context.push(Array(COLS).fill(null));
+    context[rowIndex] = row;
     for (let c = 0; c < COLS; c += 1) {
-      row[c] = randomCell([row], 0, c, pool ? { pool, specials: false } : {});
+      row[c] = randomCell(context, rowIndex, c, pool ? { pool, specials: false } : {});
+      context[rowIndex][c] = row[c];
     }
     return row;
   }
@@ -1788,6 +2163,11 @@
     updateCellBoosts(dt);
     clampCursorToView();
 
+    if (updateMineOpening(dt)) {
+      updateParticles(dt);
+      return;
+    }
+
     if (updateAnimations(dt)) {
       return;
     }
@@ -1821,6 +2201,10 @@
       }
     }
 
+    updateParticles(dt);
+  }
+
+  function updateParticles(dt) {
     for (const particle of boardGame.particles) {
       particle.life -= dt;
       particle.y -= particle.speed * dt;
@@ -1828,8 +2212,45 @@
     boardGame.particles = boardGame.particles.filter((particle) => particle.life > 0);
   }
 
+  function updateMineOpening(dt) {
+    if (!isMineOpening()) return false;
+
+    if (!boardGame.openingRowActive) {
+      boardGame.openingRowDelay -= dt;
+      if (boardGame.openingRowDelay > 0) return true;
+      boardGame.grid[GRID_ROWS - 1] = makeRisingRow(GRID_ROWS - 1);
+      boardGame.openingRowActive = true;
+      playSound("fall");
+    }
+
+    boardGame.riseOffset += boardGame.openingRiseSpeed * dt;
+    if (boardGame.riseOffset >= TILE) {
+      boardGame.riseOffset -= TILE;
+      boardGame.grid.shift();
+      boardGame.openingRowsRemaining -= 1;
+      boardGame.openingRowActive = false;
+      boardGame.grid.push(
+        boardGame.openingRowsRemaining === 0 ? makeRisingRow() : Array(COLS).fill(null)
+      );
+      boardGame.openingRowDelay = boardGame.openingRowsRemaining > 0 ? 0.12 : 0;
+      if (boardGame.openingRowsRemaining === 0) {
+        boardGame.resolving = 0.12;
+        boardGame.matchCheck = 0.05;
+      }
+    }
+
+    return true;
+  }
+
+  function isMineOpening() {
+    return Boolean(
+      boardGame?.mode === "mine" &&
+        (boardGame.openingRowsRemaining > 0 || boardGame.openingRowActive || boardGame.openingRowDelay > 0)
+    );
+  }
+
   function pullRow() {
-    if (!boardGame || boardGame.status !== "playing" || boardGame.mode === "puzzle") return;
+    if (!boardGame || boardGame.status !== "playing" || boardGame.mode === "puzzle" || isMineOpening()) return;
     boardGame.riseOffset += TILE * 0.88;
     boardGame.message = "Pull";
     boardGame.messageTimer = 0.65;
@@ -1841,6 +2262,7 @@
 
   function setGravity(directionName) {
     if (!boardGame || boardGame.status !== "playing") return;
+    if (isMineOpening()) return;
     const next = GRAVITY[directionName];
     if (!next) return;
 
@@ -1983,7 +2405,7 @@
 
     if (!matches.size) {
       boardGame.chain = 0;
-      if (boardGame.mode === "craft" && targetMet(boardGame.gained, boardGame.item.target)) {
+      if (boardGame.mode === "craft" && targetMet(boardGame.gained, boardGame.craftTarget)) {
         completeCraft();
       }
       if (boardGame.mode === "puzzle") {
@@ -2010,6 +2432,9 @@
       collectCell(cell, multiplier, row, col);
     }
 
+    state.stats.mostBlocksPopped = Math.max(state.stats.mostBlocksPopped, clearedCells.length);
+    state.stats.longestChain = Math.max(state.stats.longestChain, boardGame.chain + 1);
+    saveState();
     playSound("pop", { multiplier, count: clearedCells.length });
     showCombo(multiplier, clearedCells.length);
     settleBoard(true);
@@ -2024,6 +2449,7 @@
       return;
     }
     if (multiplier <= 1 && clearedCount < 4) return;
+    state.stats.largestCombo = Math.max(state.stats.largestCombo, multiplier);
     const crystalBonus = Math.max(0, multiplier - 1);
     if (crystalBonus) {
       boardGame.crystals += crystalBonus;
@@ -2086,7 +2512,7 @@
 
   function collectCell(cell, multiplier, row, col, partnerType = null) {
     const resource = resourceById[cell.type];
-    const value = 1 + Math.max(0, (state.mastery[cell.type] || 1) - 1);
+    const value = 1 + essenceMasteryLevel(cell.type);
     if (resource) {
       if (boardGame.mode === "puzzle") {
         if (cell.rune) boardGame.cleared += 1;
@@ -2132,24 +2558,30 @@
   function applySpecialEffect(type, row, col, partnerType = null, multiplier = 1) {
     const block = specialBlocks[type];
     if (!block) return;
+    const mastery = specialMasteryLevel(type);
 
     playSound("wild", { type });
-    boardGame.score += 150 * multiplier;
-    boardGame.message = block.label;
+    boardGame.score += (150 + mastery * 18) * multiplier;
+    boardGame.message = mastery > 1 ? `${block.label} ${mastery}` : block.label;
     boardGame.messageTimer = 0.9;
 
     if (type === "compass") {
-      clearAround(row, col, multiplier);
+      clearAround(row, col, multiplier, mastery >= 5 ? 2 : 1);
     } else if (type === "watch") {
-      boardGame.slowTimer = Math.max(boardGame.slowTimer, 6);
+      boardGame.slowTimer = Math.max(boardGame.slowTimer, 5 + mastery * 0.85);
     } else if (type === "potion") {
       const targetType = resourceById[partnerType] ? partnerType : strongestNeighborType(row, col);
-      if (targetType) clearColor(targetType, multiplier);
+      if (targetType) clearColor(targetType, multiplier + Math.floor(mastery / 4));
     } else if (type === "coal") {
-      clearInGravityDirection(row, col, 3, multiplier);
+      clearInGravityDirection(row, col, 2 + Math.ceil(mastery / 2), multiplier);
     } else if (type === "hammer2" || type === "hammer3") {
-      boostAround(row, col, block.boost || 2);
+      boostAround(row, col, (block.boost || 2) + Math.floor(mastery / 4), mastery >= 5 ? 2 : 1);
     }
+  }
+
+  function specialMasteryLevel(specialType) {
+    const tool = toolMasteryBySpecial[specialType];
+    return tool ? toolMasteryLevel(tool.id) : 0;
   }
 
   function activatePendingSpecials() {
@@ -2162,9 +2594,9 @@
     }
   }
 
-  function clearAround(row, col, multiplier = 1) {
-    for (let r = row - 1; r <= row + 1; r += 1) {
-      for (let c = col - 1; c <= col + 1; c += 1) {
+  function clearAround(row, col, multiplier = 1, radius = 1) {
+    for (let r = row - radius; r <= row + radius; r += 1) {
+      for (let c = col - radius; c <= col + radius; c += 1) {
         removeCellAt(r, c, multiplier, row, col);
       }
     }
@@ -2186,9 +2618,9 @@
     }
   }
 
-  function boostAround(row, col, boost) {
-    for (let r = row - 1; r <= row + 1; r += 1) {
-      for (let c = col - 1; c <= col + 1; c += 1) {
+  function boostAround(row, col, boost, radius = 1) {
+    for (let r = row - radius; r <= row + radius; r += 1) {
+      for (let c = col - radius; c <= col + radius; c += 1) {
         if (r < 0 || c < 0 || r >= boardGame.grid.length || c >= gridColCount()) continue;
         if (r === row && c === col) continue;
         const cell = boardGame.grid[r][c];
@@ -2349,10 +2781,17 @@
 
   function completeCraft() {
     const reward = boardGame.item.reward;
+    const wasUpgrade = boardGame.craftUpgrade && state.equipment.includes(reward.id);
     if (!state.equipment.includes(reward.id)) state.equipment.push(reward.id);
+    const nextLevel = wasUpgrade ? toolMasteryLevel(reward.id) + 1 : Math.max(toolMasteryLevel(reward.id), 1);
+    state.toolMastery[reward.id] = Math.min(8, nextLevel);
     delete state.craftFailures[boardGame.item.id];
     saveState();
-    finishBoard(true, "Blueprint Complete", `${reward.title} is ready.`);
+    finishBoard(
+      true,
+      wasUpgrade ? "Tool Mastery" : "Blueprint Complete",
+      wasUpgrade ? `${reward.title} reached level ${state.toolMastery[reward.id]}.` : `${reward.title} is ready.`
+    );
   }
 
   function completePuzzle() {
@@ -2418,11 +2857,13 @@
     if (!boardGame) return;
 
     ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = "#020303";
+    ctx.fillRect(0, 0, W, H);
     drawImage(boardGame.background, 9, 101, 302, 349);
     drawGrid();
     drawParticles();
     drawGravityCue();
-    drawImage(boardGame.border, 0, 0, W, H);
+    if (boardGame.mode !== "mine") drawImage(boardGame.border, 0, 0, W, H);
     drawHud();
   }
 
@@ -2668,6 +3109,11 @@
       return;
     }
 
+    if (boardGame.mode === "mine") {
+      drawMineHud();
+      return;
+    }
+
     ctx.save();
     ctx.fillStyle = "rgba(8, 10, 9, 0.74)";
     ctx.fillRect(0, 0, W, 89);
@@ -2716,6 +3162,62 @@
       }
     }
 
+    drawBoardMessages();
+
+    ctx.restore();
+  }
+
+  function drawMineHud() {
+    ctx.save();
+    ctx.fillStyle = "rgba(5, 6, 6, 0.62)";
+    ctx.fillRect(0, 0, W, 116);
+
+    drawImage("hud_border_mining.png", 0, 0, W, H);
+
+    drawImage("icon_crystals.png", 143, 9, 20, 20);
+    ctx.fillStyle = "#f7e6b8";
+    ctx.font = "13px Georgia, serif";
+    ctx.textAlign = "left";
+    ctx.shadowColor = "rgba(0, 0, 0, 0.95)";
+    ctx.shadowBlur = 4;
+    ctx.fillText(formatCount(state.crystals), 167, 24);
+
+    const startX = 72;
+    const gap = 43;
+    for (let index = 0; index < resourceTypes.length; index += 1) {
+      const type = resourceTypes[index];
+      const x = startX + index * gap;
+      drawImage(type.icon, x, 42, 23, 23);
+      ctx.fillStyle = "#f1dfb2";
+      ctx.font = "12px Georgia, serif";
+      ctx.textAlign = "center";
+      ctx.fillText(formatCount(state.resources[type.id]), x + 11.5, 82);
+    }
+
+    drawImage("PowerBar.png", 54, 84, 212, 48);
+    const progress = boardProgress();
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(54, 84, 212 * progress, 48);
+    ctx.clip();
+    drawImage("PowerBar_Filled.png", 54, 84, 212, 48);
+    ctx.restore();
+
+    ctx.fillStyle = "#f6dfab";
+    ctx.font = "12px Georgia, serif";
+    ctx.textAlign = "right";
+    ctx.fillText(`D${boardGame.mineDifficulty}`, 306, 24);
+    ctx.save();
+    ctx.globalAlpha = 0.72;
+    drawGravityArrow(292, 57, 11);
+    ctx.restore();
+    ctx.shadowBlur = 0;
+
+    drawBoardMessages();
+    ctx.restore();
+  }
+
+  function drawBoardMessages() {
     if (boardGame.messageTimer > 0) {
       ctx.fillStyle = "rgba(0, 0, 0, 0.48)";
       ctx.fillRect(88, 211, 144, 48);
@@ -2743,12 +3245,10 @@
       ctx.shadowBlur = 0;
       ctx.globalAlpha = 1;
     }
-
-    ctx.restore();
   }
 
   function drawCraftTargets() {
-    const entries = Object.entries(boardGame.item?.target || {});
+    const entries = Object.entries(boardGame.craftTarget || {});
     const chipWidth = Math.min(88, (W - 36) / Math.max(1, entries.length));
     const totalWidth = chipWidth * entries.length;
     let x = (W - totalWidth) / 2;
@@ -2842,12 +3342,12 @@
   function boardRightText() {
     if (boardGame.mode === "craft") return `Time ${Math.ceil(boardGame.timeLeft)}`;
     if (boardGame.mode === "puzzle") return `Moves ${boardGame.movesLeft}`;
-    return `${boardGame.gravity.label} L${state.level}`;
+    return `${boardGame.gravity.label} D${boardGame.mineDifficulty}`;
   }
 
   function boardProgress() {
     if (boardGame.mode === "craft") {
-      const target = boardGame.item.target;
+      const target = boardGame.craftTarget || boardGame.item.target;
       const done = Object.entries(target).reduce(
         (sum, [id, amount]) => sum + Math.min(1, boardGame.gained[id] / amount),
         0
@@ -2860,6 +3360,7 @@
 
   function pointerToCell(event) {
     if (!boardGame || boardGame.status !== "playing") return null;
+    if (isMineOpening()) return null;
     const { x, y } = eventToCanvasPoint(event);
     const metrics = boardMetrics();
     const offset = creepOffset(metrics);
@@ -3012,6 +3513,7 @@
   function handleKey(event) {
     if (!boardGame || boardGame.status !== "playing") return;
     unlockAudio();
+    if (isMineOpening()) return;
     const cursor = boardGame.cursor;
     const key = event.key.toLowerCase();
 
